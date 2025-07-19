@@ -2,92 +2,113 @@
 #include <algorithm>
 #include <cassert>
 
-static void move_to_front(std::deque<long>& dq, long way) {
-  auto it = std::find(dq.begin(), dq.end(), way);
-  if (it != dq.end()) {
-    dq.erase(it);
-    dq.push_front(way);
-  }
-}
-
 arc::arc(CACHE* cache)
   : arc(cache, cache->NUM_SET, cache->NUM_WAY) {}
 
-arc::arc(CACHE* /*cache*/, long sets, long ways)
-  : NUM_SET(sets)
-  , NUM_WAY(ways)
-  , state(sets)
-{}
+arc::arc(CACHE* cache, long sets, long ways)
+  : replacement(cache), NUM_SET(sets), NUM_WAY(ways)
+{
+  // Initialize adaptive parameter
+  p = 0;
+}
 
-long arc::find_victim(uint32_t, uint64_t, long set,
+long arc::find_victim(uint32_t triggering_cpu, uint64_t instr_id, long set,
                       const champsim::cache_block* current_set,
-                      champsim::address, champsim::address,
-                      access_type) {
-  auto& S = state[set];
-  // choose any invalid way first
+                      champsim::address ip, champsim::address addr,
+                      access_type type)
+{
+  // 1. Use any invalid way first
   for (long way = 0; way < NUM_WAY; ++way) {
-    if (!current_set[way].valid)
+    if (!current_set[way].valid) {
       return way;
-  }
-  // ARC decision: evict from T1 or T2
-  if (!S.T1.empty() && (S.T1.size() > S.p || (!S.B2.empty() && S.T1.size() == S.p))) {
-    return S.T1.back();
-  }
-  assert(!S.T2.empty());
-  return S.T2.back();
-}
-
-void arc::replacement_cache_fill(uint32_t, long set, long way,
-                                 champsim::address, champsim::address,
-                                 champsim::address victim_addr,
-                                 access_type) {
-  // eviction has occurred: victim_addr identifies the tag evicted
-  auto& S = state[set];
-  // if evicted was in T1, move to B1; if in T2, move to B2
-  // since we track ways, assume last victim removal done in update_replacement_state
-  (void)victim_addr;
-}
-
-void arc::update_replacement_state(uint32_t, long set, long way,
-                                   champsim::address full_addr,
-                                   champsim::address, champsim::address,
-                                   access_type, uint8_t hit) {
-  auto& S = state[set];
-  // cache hit
-  if (hit) {
-    if (std::find(S.T1.begin(), S.T1.end(), way) != S.T1.end()) {
-      S.T1.erase(std::find(S.T1.begin(), S.T1.end(), way));
-      S.T2.push_front(way);
-    } else {
-      move_to_front(S.T2, way);
     }
+  }
+
+  // 2. Determine eviction source based on adaptive target 'p'
+  champsim::address victim_addr{};
+  bool in_b2 = (std::find(B2.begin(), B2.end(), addr) != B2.end());
+  bool evict_from_T1 = (!T1.empty() &&
+                       (static_cast<long>(T1.size()) > p || (in_b2 && static_cast<long>(T1.size()) == p)));
+
+  if (evict_from_T1) {
+    // Evict LRU from T1
+    victim_addr = T1.back();
+    T1.pop_back();
+    B1.push_front(victim_addr);
+    if (static_cast<long>(B1.size()) > NUM_WAY) {
+      B1.pop_back();
+    }
+  } else {
+    // Evict LRU from T2
+    victim_addr = T2.back();
+    T2.pop_back();
+    B2.push_front(victim_addr);
+    if (static_cast<long>(B2.size()) > NUM_WAY) {
+      B2.pop_back();
+    }
+  }
+
+  // 3. Find the way index that matches the victim address
+  for (long way = 0; way < NUM_WAY; ++way) {
+    if (current_set[way].valid && current_set[way].address == victim_addr) {
+      return way;
+    }
+  }
+
+  // Fallback
+  return 0;
+}
+
+void arc::replacement_cache_fill(uint32_t triggering_cpu, long set, long way,
+                                 champsim::address addr, champsim::address ip,
+                                 champsim::address victim_addr, access_type type)
+{
+  // Case: refill from B1 (ghost of T1) -> increase 'p'
+  auto itB1 = std::find(B1.begin(), B1.end(), addr);
+  if (itB1 != B1.end()) {
+    long growth = std::max(1L, static_cast<long>(B2.size()) / std::max(1L, static_cast<long>(B1.size())));
+    p = std::min<long>(NUM_WAY, p + growth);
+    B1.erase(itB1);
+    T2.push_front(addr);
     return;
   }
-  // cache miss: adjust p if in ghost lists
-  auto it1 = std::find(S.B1.begin(), S.B1.end(), way);
-  if (it1 != S.B1.end()) {
-    long delta = std::max((long)S.B2.size() / (long)S.B1.size(), 1L);
-    S.p = std::min(S.p + delta, NUM_WAY);
-    S.B1.erase(it1);
+
+  // Case: refill from B2 (ghost of T2) -> decrease 'p'
+  auto itB2 = std::find(B2.begin(), B2.end(), addr);
+  if (itB2 != B2.end()) {
+    long shrink = std::max(1L, static_cast<long>(B1.size()) / std::max(1L, static_cast<long>(B2.size())));
+    p = std::max(0L, p - shrink);
+    B2.erase(itB2);
+    T2.push_front(addr);
+    return;
   }
-  auto it2 = std::find(S.B2.begin(), S.B2.end(), way);
-  if (it2 != S.B2.end()) {
-    long delta = std::max((long)S.B1.size() / (long)S.B2.size(), 1L);
-    S.p = std::max(S.p - delta, 0L);
-    S.B2.erase(it2);
+
+  // New block: insert into T1
+  T1.push_front(addr);
+
+  // Trim history lists
+  if (static_cast<long>(B1.size()) > NUM_WAY) B1.pop_back();
+  if (static_cast<long>(B2.size()) > NUM_WAY) B2.pop_back();
+}
+
+void arc::update_replacement_state(uint32_t triggering_cpu, long set, long way,
+                                   champsim::address addr, champsim::address ip,
+                                   champsim::address victim_addr, access_type type,
+                                   uint8_t hit)
+{
+  if (!hit) return;
+
+  // On hit: promote from T1 to T2 or refresh in T2
+  auto itT1 = std::find(T1.begin(), T1.end(), addr);
+  if (itT1 != T1.end()) {
+    T1.erase(itT1);
+    T2.push_front(addr);
+    return;
   }
-  // choose and remove victim from T1 or T2, add to ghost
-  long victim = find_victim(0, 0, set, nullptr, 0, 0, access_type::LOAD);
-  if (std::find(S.T1.begin(), S.T1.end(), victim) != S.T1.end()) {
-    S.T1.pop_back();
-    S.B1.push_front(victim);
-  } else {
-    S.T2.pop_back();
-    S.B2.push_front(victim);
+
+  auto itT2 = std::find(T2.begin(), T2.end(), addr);
+  if (itT2 != T2.end()) {
+    T2.erase(itT2);
+    T2.push_front(addr);
   }
-  // insert new way into T1
-  S.T1.push_front(way);
-  // trim ghosts
-  if ((long)S.B1.size() > NUM_WAY) S.B1.pop_back();
-  if ((long)S.B2.size() > NUM_WAY) S.B2.pop_back();
 }
