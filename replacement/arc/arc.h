@@ -11,14 +11,8 @@ class arc : public champsim::modules::replacement
   long NUM_WAY;
   long NUM_SET;
 
-  // ARC lists (store block addresses)
-  std::deque<champsim::address> T1; // Recently used once, in cache
-  std::deque<champsim::address> T2; // Frequently used, in cache
-  std::deque<champsim::address> B1; // Recently evicted from T1
-  std::deque<champsim::address> B2; // Recently evicted from T2
-
-  int p = 0; // Adaptive target size for T1
-  uint64_t cycle = 0; // Optional global cycle counter
+  std::vector<std::deque<int>> T1, T2, B1, B2;
+  std::vector<uint64_t> p;
 
 public:
   arc(CACHE* cache);
