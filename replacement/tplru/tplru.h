@@ -10,7 +10,8 @@ class tplru : public champsim::modules::replacement
 {
   long NUM_WAY;
   std::vector<short> all_btrees;
-  uint64_t cycle = 0;
+  /* above is the vector that contains all binary tree
+  sequentially, tree with index n can be found at index n*NUM_WAY */
 
 public:
   explicit tplru(CACHE* cache);
