@@ -3,11 +3,12 @@
 set -euo pipefail
 
 if [[ $# -ne 4 ]]; then
-  echo "Usage: $0 <config_file> <warmup_count> <sim_count> <policy>"
+  echo "Usage: $0 <trace_file> <warmup_count> <sim_count> <policy>"
   exit 1
 fi
 
-CONFIG_FILE=$1
+CONFIG_FILE="cassandra_phase0_core0.trace.xz"
+TRACE_FILE=$1
 WARMUP_COUNT=$2
 SIM_COUNT=$3
 POLICY=$4
@@ -44,7 +45,7 @@ for i in "${!SETS[@]}"; do
   bin/champsim \
     --warmup-instructions "$WARMUP_COUNT" \
     --simulation-instructions "$SIM_COUNT" \
-    cassandra_phase0_core0.trace.xz \
+    "$TRACE_FILE" \
     > "${POLICY}_${set}_${way}.txt" && echo "- ${POLICY}_${set}_${way}.txt"&
 done
 
