@@ -8,6 +8,8 @@
 
 class larc : public champsim::modules::replacement
 {
+  static constexpr float CR_UPPERBOUND = 0.9f, CR_LOWERBOUND = 0.1f;
+
   long NUM_WAY;
   float cr;
   // 2D vectors for LRU queues

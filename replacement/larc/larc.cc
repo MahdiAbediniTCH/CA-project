@@ -9,7 +9,7 @@ larc::larc(CACHE* cache) : larc(cache, cache->NUM_SET, cache->NUM_WAY) {}
 larc::larc(CACHE* cache, long sets, long ways) :
   replacement(cache),
   NUM_WAY(ways), 
-  cr(static_cast<float>(ways) * 0.1f), 
+  cr(static_cast<float>(ways) * CR_LOWERBOUND), 
   all_q(sets, std::vector<short>(ways)), 
   all_qr(sets, std::vector<champsim::address>(ways))
 {
@@ -24,7 +24,7 @@ long larc::find_victim(uint32_t triggering_cpu, uint64_t instr_id, long set, con
   // This method is called when a miss occurs
   // Update cr
   float c = static_cast<float>(NUM_WAY);
-  cr = std::min(0.9f * c, cr + (c / cr));
+  cr = std::min(CR_UPPERBOUND * c, cr + (c / cr));
 
   // get reference to the inner vectors
   auto& q = all_q[set]; 
@@ -66,7 +66,7 @@ void larc::update_replacement_state(uint32_t triggering_cpu, long set, long way,
   if (hit && access_type{type} != access_type::WRITE) { 
     // Update cr
     float c = static_cast<float>(NUM_WAY);
-    cr = std::max(0.1f * c, cr - (c / (c - cr)));
+    cr = std::max(CR_LOWERBOUND * c, cr - (c / (c - cr)));
 
     auto& q = all_q[set]; // Reference to the inner vector
 
